@@ -21,12 +21,11 @@ desc = \
     "read ~ ppsych + motiv" + "\n" + \
     "arith ~ motiv"
 
-mod = semopy.Model(desc, mimic_lavaan=False)
-print(mod.vars)
-print(mod.parameters)
-print(mod.mx_lambda)
-
-
-res = mod.fit(data, obj='MLW', solver='SLSQP')
+model = semopy.Model(desc, mimic_lavaan=False)
+res = model.fit(data, obj='MLW', solver='SLSQP')
 print(res)
-print(mod.inspect())
+print(model.inspect())
+
+for name in model.matrices_names:
+    print(name)
+    print(getattr(model, f"mx_{name}"))

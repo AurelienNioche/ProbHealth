@@ -137,6 +137,7 @@ class Model(torch.nn.Module):
         None.
 
         """
+
         if not self.mimic_lavaan:
             outputs = self.vars['output']
             self.vars['_output'] = outputs
@@ -496,15 +497,28 @@ class Model(torch.nn.Module):
         beta, lamb, psi, theta = self.matrices
         c = torch.linalg.inv(self.identity_c - beta)
         m = lamb @ c
+        # m2 =  c.T @ lamb.T
+        # assert np.all([i == j  for i, j in zip(m.T.flatten(), m2.flatten())])
         return m @ psi @ m.T + theta, (m, c)
 
     def update_matrices(self):
         """
         Update all matrices from a parameter vector.
         """
-        for mx, (r1, r2) in zip(self.matrices, self.param_ranges):
+        n_param = self.torch_param_val.shape[0]
+        param_vals = torch.zeros(n_param, dtype=self.torch_param_val.dtype)
+
+        for i, v, b in zip(range(n_param), self.torch_param_val, self.param_bounds):
+            if b[0] == 0:
+                v = torch.log(1 + torch.exp(v))
+            else:
+                assert b[0] is None and b[1] is None, f"WTF bounds: {b}"
+
+            param_vals[i] = v
+
+        for mx, (r1, r2), b in zip(self.matrices, self.param_ranges, self.param_bounds):
             if r1:
-                mx[r1] = self.torch_param_val[r2]
+                mx[r1] = param_vals[r2]
 
     def load_starting_values(self):
         """
@@ -589,8 +603,9 @@ class Model(torch.nn.Module):
             diff_matrices[i] = [m if type(m) is not int else None for m in dm]
         for rng in ranges:
             rng[0] = tuple(zip(*rng[0]))
-        self.param_vals = np.array(param_vals)
+        self._starting_param_vals = np.array(param_vals)
         self.param_ranges = ranges
+        self.param_bounds = [param.bound for _, param in self._par.items()]
         self.mx_diffs = diff_matrices
         self.identity_c = torch.eye(self.mx_beta.shape[0])
 
@@ -861,7 +876,15 @@ class Model(torch.nn.Module):
         self.load_starting_values()
         self.prepare_params()
 
-        self.torch_param_val = torch.nn.Parameter(torch.from_numpy(self.param_vals))
+        start_val = self._starting_param_vals
+        for i, v, b in zip(range(len(start_val)), start_val, self.param_bounds):
+
+            if b[0] == 0:
+                start_val[i] = np.log(np.exp(v)-1)
+            else:
+                assert b[0] is None and b[1] is None
+
+        self.torch_param_val = torch.nn.Parameter(torch.from_numpy(start_val))
 
     def calc_fim(self, inverse=False):
         """
@@ -953,6 +976,22 @@ class Model(torch.nn.Module):
             grad.append(g)
         return grad
 
+    @property
+    def param_vals(self):
+
+        n_param = self.torch_param_val.shape[0]
+        param_val = np.zeros(n_param)
+
+        for i, v, b in zip(range(n_param), self.torch_param_val, self.param_bounds):
+            if b[0] == 0:
+                v = torch.log(1 + torch.exp(v))
+            else:
+                assert b[0] is None and b[1] is None, f"WTF bounds: {b}"
+
+            param_val[i] = v.item()
+
+        return param_val
+
 
 def main():
 
@@ -962,13 +1001,7 @@ def main():
     #     "read ~ ppsych + motiv" + "\n" + \
     #     "arith ~ motiv"
 
-    data = pd.read_csv("fake.csv")
-
-    # theta1 = np.array([[1., 2., 4.], [-3., -2., 4.]])
-    # theta2 = np.array([5., -3., 4.])
-    # cst = -3.
-
-    print(data)
+    data = pd.read_csv("fake_no_int.csv")
 
     desc = \
       "h ~ x\n" \
@@ -976,7 +1009,7 @@ def main():
       "e ~ x\n" \
       "y ~ h + m + e"
 
-    model = Model(desc)
+    model = Model(desc, mimic_lavaan=True)
     # optim = torch.optim.Adam(model.parameters())  # init the optimizer
     # for epoch in range(1000):
     #     optim.zero_grad()  # reset the gradients of the parameters
@@ -989,11 +1022,13 @@ def main():
 
     model.prepare(data)
 
+    print("N parameters", len(model.param_vals))
+
     torch_data = torch.from_numpy(data[model.vars['observed']].to_numpy())
 
     optim = torch.optim.Adam(model.parameters(), lr=0.01)  # init the optimizer
 
-    epochs = 2000
+    epochs = 5000
     with tqdm(total=epochs) as pb:
         for epoch in range(epochs):
             optim.zero_grad()  # reset the gradients of the parameters
@@ -1002,10 +1037,20 @@ def main():
             loss.backward(retain_graph=True)  # compute the gradients and store them in the parameter tensors
             optim.step()  # take a step in the negative gradient direction using adam
 
+            pb.set_postfix({"loss": loss.item()})
             pb.update()
     # defaultdict(<class 'dict'>, {'motiv': {'motiv': 'START', 'ppsych': 'START'}, 'ppsych': {'ppsych': 'START'}, 'read': {'read': None}, 'arith': {'arith': None}})
     model.update_matrices()
+
+    # for name in model.matrices_names:
+    #     print(name)
+    #     print(getattr(model, f"mx_{name}"))
+    # for name, param in model.named_parameters():
+    #     if param.requires_grad:
+    #         print(name, param.data)
     print(inspect_list(model))
+    # from semopy.means import estimate_means
+    # print(estimate_means(model))
 
 
 if __name__ == "__main__":

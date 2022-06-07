@@ -1,12 +1,12 @@
 library("lavaan")
 
-dat <- read.csv("fake.csv")
+dat <- read.csv("fake_no_int.csv")
 cov(dat)
 mdl <- '
-  h ~ 1 + x 
-  m ~ 1 + x
-  e ~ 1 + x
-  y ~ 1 + h + m + e
+  h ~ x 
+  m ~ x
+  e ~ x
+  y ~ h + m + e
 '
-fit <- sem(mdl, data=dat)
+fit <- sem(mdl, data=dat, likelihood="wishart")
 summary(fit)
